@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Dismantle House</title>
+<style>
+ body { margin:0; font-family:sans-serif; background:#2c3e50; color:#ecf0f1; overflow:hidden; }
+ #game { position:relative; width:800px; height:600px; background:#34495e; margin:10px auto; border:3px solid #7f8c8d; }
+.entity { position:absolute; cursor:pointer; user-select:none; }
+ #player { width:20px; height:20px; background:#e74c3c; z-index:100; }
+.house { background:#8b4513; border:2px solid #5d2906; }
+.wall { background:#a0522d; }
+.destructible { background:#95a5a6; border:1px solid #7f8c8d; }
+.wolf { width:15px; height:15px; background:#7f8c8d; border-radius:50%; }
+.deer { width:18px; height:18px; background:#8b6f47; border-radius:50%; }
+.sheep { width:20px; height:20px; background:#fff; border-radius:50%; border:1px solid #999; }
+.farm { background:#27ae60; }
+.well { background:#3498db; border-radius:50%; }
+ #ui { width:800px; margin:0 auto; display:flex; justify-content:space-between; padding:5px; background:#2c3e50; font-size:14px; }
+ #inventory { font-size:14px; display:flex; gap:15px; }
+ .inv-item { display:flex; align-items:center; gap:4px; }
+ .inv-icon { font-size:16px; }
+ #popup { position:absolute; background:#2c3e50; border:2px solid #ecf0f1; padding:5px; display:none; font-size:12px; }
+ #craft { position:fixed; bottom:10px; left:50%; transform:translateX(-50%); background:#2c3e50; padding:10px; border:2px solid #ecf0f1; display:none; max-height:150px; overflow-y:auto; }
+ button { margin:2px; padding:5px 10px; cursor:pointer; background:#34495e; color:#ecf0f1; border:1px solid #7f8c8d; }
+ button:hover { background:#2c3e50; }
+</style>
+</head>
+<body>
+<div id="ui">
+  <div>🏠: <span id="housePct">0</span>% | 🔨: <span id="tool">Hammer</span></div>
+  <div id="inventory">
+    <div class="inv-item"><span class="inv-icon">🪵</span><span id="inv-wood">0</span></div>
+    <div class="inv-item"><span class="inv-icon">⚙️</span><span id="inv-metal">0</span></div>
+    <div class="inv-item"><span class="inv-icon">♻️</span><span id="inv-plastic">0</span></div>
+    <div class="inv-item"><span class="inv-icon">🧵</span><span id="inv-cloth">0</span></div>
+    <div class="inv-item"><span class="inv-icon">🍎</span><span id="inv-food">0</span></div>
+    <div class="inv-item"><span class="inv-icon">💧</span><span id="inv-water">0</span></div>
+  </div>
+</div>
+<div id="game">
+  <div id="player" class="entity"></div>
+</div>
+<div id="popup"></div>
+<div id="craft">
+  <button onclick="craft('wall')">🧱 Board Up Wall (🪵1,⚙️1,🧵1)</button>
+  <button onclick="craft('window')">🪟 Fix Window (🪵2,⚙️2)</button>
+  <button onclick="craft('door')">🚪 Fix Door (🪵4)</button>
+  <button onclick="craft('paint')">🎨 Make Paint (🍎1,💧1)</button>
+  <button onclick="craft('clothes')">👕 Make Clothes (🧵4,🪵2,♻️2)</button>
+  <button onclick="craft('cook')">🍲 Cook Food (🍎2,💧1)</button>
+  <button onclick="toggleCraft()">Close</button>
+</div>
+
+<script>
+const game = document.getElementById('game');
+const player = document.getElementById('player');
+const ui = {
+  housePct: document.getElementById('housePct'),
+  inv: {
+    wood: document.getElementById('inv-wood'),
+    metal: document.getElementById('inv-metal'),
+    plastic: document.getElementById('inv-plastic'),
+    cloth: document.getElementById('inv-cloth'),
+    food: document.getElementById('inv-food'),
+    water: document.getElementById('inv-water')
+  },
+  tool: document.getElementById('tool'),
+  popup: document.getElementById('popup'),
+  craft: document.getElementById('craft')
+};
+
+// GAME STATE - EDIT THIS TO BALANCE YOUR GAME
+let state = {
+  mats: {wood:0, metal:0, plastic:0, cloth:0, food:0, water:0},
+  tool: 'hammer',
+  tools: {hammer:true, bat:false, sledge:false},
+  pos: {x:400, y:300},
+  houseParts: 0, houseTotal: 20, // 20 parts = 100%
+  wellFed: 0
+};
+
+// COSTS - EDIT THESE TO CHANGE BALANCE
+const COSTS = {
+  wall: {wood:1, metal:1, cloth:1},
+  window: {wood:2, metal:2},
+  door: {wood:4},
+  paint: {food:1, water:1},
+  clothes:{cloth:4, wood:2, plastic:2},
+  cook: {food:2, water:1}
+};
+
+// MAP DATA - EDIT TO ADD/MOVE OBJECTS
+const map = [
+  // Home Base - center
+  {type:'house', x:350, y:250, w:100, h:100, id:'home'},
+  {type:'wall', x:350, y:250, w:100, h:10, broken:true, part:true},
+  {type:'wall', x:350, y:340, w:100, h:10, broken:true, part:true},
+  {type:'wall', x:350, y:250, w:10, h:100, broken:true, part:true},
+  {type:'wall', x:440, y:250, w:10, h:100, broken:true, part:true},
+  {type:'window', x:380, y:250, w:40, h:10, broken:true, part:true},
+  {type:'door', x:390, y:340, w:20, h:10, broken:true, part:true},
+
+  // 3 smaller houses
+  {type:'destructible', x:100, y:100, w:60, h:60, drops:{wood:5,metal:3,cloth:2}},
+  {type:'destructible', x:650, y:120, w:60, h:60, drops:{wood:4,metal:4,plastic:2}},
+  {type:'destructible', x:150, y:450, w:60, h:60, drops:{wood:6,cloth:3,food:2}},
+
+  // Farm
+  {type:'farm', x:600, y:450, w:150, h:100},
+  {type:'destructible', x:620, y:470, w:20, h:20, drops:{food:4}, regrow:3000},
+  {type:'destructible', x:660, y:480, w:20, h:20, drops:{food:4}, regrow:3000},
+  {type:'destructible', x:700, y:460, w:20, h:20, drops:{food:4}, regrow:3000},
+
+  // Well
+  {type:'well', x:80, y:300, w:30, h:30},
+
+  // Loot objects
+  {type:'destructible', x:200, y:200, w:30, h:30, drops:{wood:2,cloth:2}, name:'Couch'},
+  {type:'destructible', x:500, y:150, w:25, h:40, drops:{metal:3,plastic:2}, name:'Fridge'},
+  {type:'destructible', x:300, y:500, w:40, h:20, drops:{wood:3}, name:'Fence'},
+  {type:'destructible', x:450, y:80, w:35, h:25, drops:{metal:5}, name:'Car'},
+
+  // Tools to find
+  {type:'tool', x:120, y:130, w:15, h:15, tool:'bat'},
+  {type:'tool', x:670, y:150, w:15, h:15, tool:'sledge'},
+
+  // Wolf
+  {type:'wolf', x:250, y:400, w:15, h:15, hp:3, drops:{food:2,cloth:3,metal:1}},
+
+  // Deer
+  {type:'deer', x:350, y:500, w:18, h:18, hp:2, drops:{food:3,cloth:2}},
+  {type:'deer', x:500, y:350, w:18, h:18, hp:2, drops:{food:3,cloth:2}},
+
+  // Sheep
+  {type:'sheep', x:280, y:550, w:20, h:20, hp:1, drops:{cloth:4,food:1}},
+  {type:'sheep', x:550, y:400, w:20, h:20, hp:1, drops:{cloth:4,food:1}}
+];
+
+let entities = [];
+function spawnMap() {
+  map.forEach(o => {
+    let div = document.createElement('div');
+    div.className = `entity ${o.type}`;
+    div.style.left = o.x+'px';
+    div.style.top = o.y+'px';
+    div.style.width = o.w+'px';
+    div.style.height = o.h+'px';
+    if(o.broken) div.style.background = '#555';
+    div.dataset.obj = JSON.stringify(o);
+    game.appendChild(div);
+    entities.push({el:div,...o});
+  });
+}
+
+// MOVEMENT
+let keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if(e.key === 'e') tryInteract();
+  if(e.key === 'c') toggleCraft();
+  if(e.key === '1') setTool('hammer');
+  if(e.key === '2' && state.tools.bat) setTool('bat');
+  if(e.key === '3' && state.tools.sledge) setTool('sledge');
+});
+document.addEventListener('keyup', e => keys[e.key] = false);
+
+function gameLoop() {
+  // Movement
+  if(keys['ArrowUp'] || keys['w']) state.pos.y = Math.max(0, state.pos.y-3);
+  if(keys['ArrowDown'] || keys['s']) state.pos.y = Math.min(580, state.pos.y+3);
+  if(keys['ArrowLeft'] || keys['a']) state.pos.x = Math.max(0, state.pos.x-3);
+  if(keys['ArrowRight'] || keys['d']) state.pos.x = Math.min(780, state.pos.x+3);
+  player.style.left = state.pos.x+'px';
+  player.style.top = state.pos.y+'px';
+
+  // Animals move
+  entities.filter(e=>['wolf','deer','sheep'].includes(e.type)).forEach(w => {
+    if(Math.random()<0.02) {
+      w.x += (Math.random()-0.5)*2;
+      w.y += (Math.random()-0.5)*2;
+      w.x = Math.max(0, Math.min(780, w.x));
+      w.y = Math.max(0, Math.min(580, w.y));
+      w.el.style.left = w.x+'px';
+      w.el.style.top = w.y+'px';
+    }
+  });
+
+  // Well Fed timer
+  if(state.wellFed>0) {
+    state.wellFed--;
+    player.style.boxShadow = '0 0 10px #f1c40f';
+  } else {
+    player.style.boxShadow = 'none';
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+function tryInteract() {
+  let px = state.pos.x+10, py = state.pos.y+10;
+  entities.forEach(e => {
+    if(px>e.x && px<e.x+e.w && py>e.y && py<e.y+e.h) {
+      if(e.type==='destructible') smash(e);
+      if(e.type==='well') getWater();
+      if(['wolf','deer','sheep'].includes(e.type)) hitAnimal(e);
+      if(e.type==='tool') pickupTool(e);
+      if(e.type==='wall' || e.type==='window' || e.type==='door') showPopup(e, px, py);
+    }
+  });
+}
+
+function canBreak(obj) {
+  if(state.tool==='hammer') return ['wood','plastic','cloth'].some(m=>obj.drops[m]);
+  if(state.tool==='bat') return true; // bat breaks metal too
+  if(state.tool==='sledge') return true; // sledge breaks all
+  return false;
+}
+
+function smash(obj) {
+  if(!canBreak(obj)) return showMsg('Need better tool!');
+  let bonus = state.wellFed>0? 1 : 0;
+  for(let m in obj.drops) {
+    state.mats[m] += obj.drops[m] + bonus;
+  }
+  showMsg(`+${Object.entries(obj.drops).map(([k,v])=>v+bonus).join(' +')}`);
+  obj.el.remove();
+  entities = entities.filter(e=>e!==obj);
+  if(obj.regrow) {
+    setTimeout(()=>{ obj.el.style.display='block'; entities.push(obj); game.appendChild(obj.el); }, obj.regrow);
+  }
+  updateUI();
+}
+
+function getWater() {
+  state.mats.water += 2;
+  showMsg('💧 +2 Water');
+  updateUI();
+}
+
+function hitAnimal(a) {
+  a.hp--;
+  showMsg('Hit!');
+  if(a.hp<=0) {
+    for(let m in a.drops) state.mats[m] += a.drops[m];
+    let animalName = a.type === 'wolf' ? '🐺' : a.type === 'deer' ? '🦌' : '🐑';
+    showMsg(`${animalName} down!`);
+    a.el.remove();
+    entities = entities.filter(e=>e!==a);
+  }
+  updateUI();
+}
+
+function pickupTool(t) {
+  state.tools[t.tool] = true;
+  setTool(t.tool);
+  showMsg(`Got ${t.tool}! Press ${t.tool==='bat'?2:3} to use`);
+  t.el.remove();
+  entities = entities.filter(e=>e!==t);
+}
+
+function setTool(t) {
+  if(state.tools[t]) {
+    state.tool = t;
+    let toolEmoji = t === 'hammer' ? '🔨' : t === 'bat' ? '🏏' : '⛏️';
+    ui.tool.textContent = toolEmoji + ' ' + t.charAt(0).toUpperCase()+t.slice(1);
+  }
+}
+
+function craft(item) {
+  let cost = COSTS[item];
+  for(let m in cost) {
+    if(state.mats[m]<cost[m]) return showMsg('Not enough materials!');
+  }
+  for(let m in cost) state.mats[m] -= cost[m];
+
+  if(item==='wall'||item==='window'||item==='door') {
+    state.houseParts++;
+    showMsg('🏠 House repaired!');
+  } else if(item==='paint') {
+    showMsg('🎨 Made Paint!');
+  } else if(item==='clothes') {
+    showMsg('👕 Made Clothes!');
+  } else if(item==='cook') {
+    state.mats.food += 1; // cooked food better
+    state.wellFed = 1800; // 30 sec at 60fps
+    showMsg('🍲 Well Fed!');
+  }
+  updateUI();
+}
+
+function showPopup(part, x, y) {
+  if(part.broken) {
+    let cost = COSTS[part.type];
+    let icons = {wood:'🪵', metal:'⚙️', plastic:'♻️', cloth:'🧵', food:'🍎', water:'💧'};
+    let costStr = Object.entries(cost).map(([k,v])=>`${icons[k]}${v}`).join(' ');
+    ui.popup.innerHTML = `Fix ${part.type}<br>Needs: ${costStr}<br>Press C to craft`;
+    ui.popup.style.left = x+20+'px';
+    ui.popup.style.top = y+'px';
+    ui.popup.style.display = 'block';
+    setTimeout(()=>ui.popup.style.display='none', 2000);
+  }
+}
+
+function toggleCraft() {
+  ui.craft.style.display = ui.craft.style.display==='none'? 'block' : 'none';
+}
+
+function showMsg(txt) {
+  ui.popup.textContent = txt;
+  ui.popup.style.left = state.pos.x+'px';
+  ui.popup.style.top = state.pos.y-20+'px';
+  ui.popup.style.display = 'block';
+  setTimeout(()=>ui.popup.style.display='none', 1000);
+}
+
+function updateUI() {
+  ui.housePct.textContent = Math.floor(state.houseParts/state.houseTotal*100);
+  ui.inv.wood.textContent = state.mats.wood;
+  ui.inv.metal.textContent = state.mats.metal;
+  ui.inv.plastic.textContent = state.mats.plastic;
+  ui.inv.cloth.textContent = state.mats.cloth;
+  ui.inv.food.textContent = state.mats.food;
+  ui.inv.water.textContent = state.mats.water;
+}
+
+spawnMap();
+updateUI();
+gameLoop();
+</script>
+</body>
+</html>
